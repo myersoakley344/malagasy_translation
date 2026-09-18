@@ -1,138 +1,171 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Malagasy Streaming Test</title>
-  <style>
-    body {
-      max-width: 760px;
-      margin: 2rem auto;
-      padding: 0 1rem;
-      font-family: system-ui, sans-serif;
+<script>
+  const websocketUrl =
+    "wss://25ycbm8ibdugo.clorecloud.net/stream";
+
+  const audioFileInput = document.querySelector("#audioFile");
+  const startButton = document.querySelector("#startButton");
+  const stopButton = document.querySelector("#stopButton");
+  const statusElement = document.querySelector("#status");
+  const messagesElement = document.querySelector("#messages");
+
+  const SAMPLE_RATE = 16000;
+  const BYTES_PER_SAMPLE = 2;
+  const CHANNELS = 1;
+  const CHUNK_SECONDS = 0.5;
+
+  const CHUNK_BYTES =
+    SAMPLE_RATE *
+    BYTES_PER_SAMPLE *
+    CHANNELS *
+    CHUNK_SECONDS;
+
+  let socket = null;
+  let stopped = false;
+
+  function setStatus(message) {
+    statusElement.textContent = message;
+  }
+
+  function addMessage(message) {
+    messagesElement.textContent += `${message}\n`;
+    messagesElement.scrollTop = messagesElement.scrollHeight;
+  }
+
+  function sleep(milliseconds) {
+    return new Promise((resolve) => {
+      setTimeout(resolve, milliseconds);
+    });
+  }
+
+  startButton.addEventListener("click", async () => {
+    const file = audioFileInput.files[0];
+
+    if (!file) {
+      setStatus("Choose a PCM file first.");
+      return;
     }
 
-    button {
-      margin: 0.25rem 0.5rem 0.25rem 0;
-      padding: 0.6rem 1rem;
-    }
+    startButton.disabled = true;
+    stopButton.disabled = false;
+    stopped = false;
+    messagesElement.textContent = "";
+    setStatus("Connecting...");
 
-    pre {
-      padding: 1rem;
-      min-height: 8rem;
-      background: #f2f2f2;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-    }
+    socket = new WebSocket(websocketUrl);
+    socket.binaryType = "arraybuffer";
 
-    #status {
-      font-weight: 600;
-    }
-  </style>
-</head>
-<body>
-  <h1>Malagasy streaming test</h1>
+    socket.onopen = async () => {
+      setStatus("Streaming");
+      addMessage("WebSocket connected.");
 
-  <p>
-    This page tests a WebSocket connection to the Clore server.
-  </p>
-
-  <label>
-    Audio file:
-    <input
-  id="audioFile"
-  type="file"
-  accept="audio/*,.pcm,.raw"
->
-  </label>
-
-  <p>
-    <button id="startButton">Start simulated stream</button>
-    <button id="stopButton" disabled>Stop</button>
-  </p>
-
-  <p>Status: <span id="status">Idle</span></p>
-
-  <h2>Server messages</h2>
-  <pre id="messages"></pre>
-
-  <script>
-    const websocketUrl =
-      "wss://25ycbm8ibdugo.clorecloud.net/stream";
-
-    const audioFileInput = document.querySelector("#audioFile");
-    const startButton = document.querySelector("#startButton");
-    const stopButton = document.querySelector("#stopButton");
-    const statusElement = document.querySelector("#status");
-    const messagesElement = document.querySelector("#messages");
-
-    let socket = null;
-    let stopped = false;
-
-    function setStatus(message) {
-      statusElement.textContent = message;
-    }
-
-    function addMessage(message) {
-      messagesElement.textContent += `${message}\n`;
-    }
-
-    startButton.addEventListener("click", async () => {
-      const file = audioFileInput.files[0];
-
-      if (!file) {
-        setStatus("Choose an audio file first.");
-        return;
-      }
-
-      startButton.disabled = true;
-      stopButton.disabled = false;
-      stopped = false;
-      messagesElement.textContent = "";
-      setStatus("Connecting...");
-
-      socket = new WebSocket(websocketUrl);
-      socket.binaryType = "arraybuffer";
-
-      socket.onopen = async () => {
-        setStatus("Connected");
-        addMessage("WebSocket connected.");
-
-        // Initial test only: send the complete file once.
+      try {
         const buffer = await file.arrayBuffer();
-        socket.send(buffer);
-        addMessage(`Sent ${buffer.byteLength} bytes.`);
+        const totalChunks = Math.ceil(
+          buffer.byteLength / CHUNK_BYTES
+        );
 
-        socket.send("stop");
-        addMessage("Sent stop.");
-      };
+        addMessage(
+          `File size: ${buffer.byteLength} bytes`
+        );
+        addMessage(
+          `Sending ${totalChunks} chunks of ` +
+          `${CHUNK_SECONDS} seconds`
+        );
 
-      socket.onmessage = (event) => {
+        for (
+          let offset = 0;
+          offset < buffer.byteLength;
+          offset += CHUNK_BYTES
+        ) {
+          if (stopped) {
+            break;
+          }
+
+          const end = Math.min(
+            offset + CHUNK_BYTES,
+            buffer.byteLength
+          );
+
+          const chunk = buffer.slice(offset, end);
+          socket.send(chunk);
+
+          const chunkNumber =
+            Math.floor(offset / CHUNK_BYTES) + 1;
+
+          if (
+            chunkNumber === 1 ||
+            chunkNumber % 10 === 0 ||
+            end === buffer.byteLength
+          ) {
+            addMessage(
+              `Sent chunk ${chunkNumber}/${totalChunks}`
+            );
+          }
+
+          await sleep(CHUNK_SECONDS * 1000);
+        }
+
+        if (!stopped && socket.readyState === WebSocket.OPEN) {
+          socket.send("stop");
+          addMessage("Sent stop.");
+          setStatus("Finishing...");
+        }
+      } catch (error) {
+        addMessage(`Streaming error: ${error.message}`);
+        setStatus("Error");
+      }
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+
+        if (message.event === "received") {
+          if (
+            message.packets === 1 ||
+            message.packets % 10 === 0
+          ) {
+            addMessage(
+              `Server received ${message.packets} packets ` +
+              `(${message.audio_seconds}s)`
+            );
+          }
+        } else if (message.event === "complete") {
+          addMessage(
+            `Complete: ${message.audio_seconds}s received`
+          );
+        }
+      } catch {
         addMessage(event.data);
-      };
+      }
+    };
 
-      socket.onerror = () => {
-        setStatus("WebSocket error");
-        addMessage("WebSocket error.");
-      };
+    socket.onerror = () => {
+      setStatus("WebSocket error");
+      addMessage("WebSocket error.");
+    };
 
-      socket.onclose = () => {
+    socket.onclose = () => {
+      if (!stopped) {
         setStatus("Closed");
-        startButton.disabled = false;
-        stopButton.disabled = true;
-      };
-    });
-
-    stopButton.addEventListener("click", () => {
-      stopped = true;
-
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send("stop");
-        socket.close();
       }
 
-      setStatus("Stopped");
-    });
-  </script>
-</body>
-</html>
+      startButton.disabled = false;
+      stopButton.disabled = true;
+    };
+  });
+
+  stopButton.addEventListener("click", () => {
+    stopped = true;
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send("stop");
+      socket.close();
+    }
+
+    setStatus("Stopped");
+    addMessage("Stopped by user.");
+    startButton.disabled = false;
+    stopButton.disabled = true;
+  });
+</script>
