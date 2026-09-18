@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Malagasy Streaming Test</title>
+  <style>
+    body {
+      max-width: 760px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      font-family: system-ui, sans-serif;
+    }
+
+    button {
+      margin: 0.25rem 0.5rem 0.25rem 0;
+      padding: 0.6rem 1rem;
+    }
+
+    pre {
+      padding: 1rem;
+      min-height: 8rem;
+      background: #f2f2f2;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    #status {
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <h1>Malagasy streaming test</h1>
+
+  <p>
+    This page tests a WebSocket connection to the Clore server.
+  </p>
+
+  <label>
+    Audio file:
+    <input id="audioFile" type="file" accept="audio/*">
+  </label>
+
+  <p>
+    <button id="startButton">Start simulated stream</button>
+    <button id="stopButton" disabled>Stop</button>
+  </p>
+
+  <p>Status: <span id="status">Idle</span></p>
+
+  <h2>Server messages</h2>
+  <pre id="messages"></pre>
+
+  <script>
+    const websocketUrl =
+      "wss://25ycbm8ibdugo.clorecloud.net/stream";
+
+    const audioFileInput = document.querySelector("#audioFile");
+    const startButton = document.querySelector("#startButton");
+    const stopButton = document.querySelector("#stopButton");
+    const statusElement = document.querySelector("#status");
+    const messagesElement = document.querySelector("#messages");
+
+    let socket = null;
+    let stopped = false;
+
+    function setStatus(message) {
+      statusElement.textContent = message;
+    }
+
+    function addMessage(message) {
+      messagesElement.textContent += `${message}\n`;
+    }
+
+    startButton.addEventListener("click", async () => {
+      const file = audioFileInput.files[0];
+
+      if (!file) {
+        setStatus("Choose an audio file first.");
+        return;
+      }
+
+      startButton.disabled = true;
+      stopButton.disabled = false;
+      stopped = false;
+      messagesElement.textContent = "";
+      setStatus("Connecting...");
+
+      socket = new WebSocket(websocketUrl);
+      socket.binaryType = "arraybuffer";
+
+      socket.onopen = async () => {
+        setStatus("Connected");
+        addMessage("WebSocket connected.");
+
+        // Initial test only: send the complete file once.
+        const buffer = await file.arrayBuffer();
+        socket.send(buffer);
+        addMessage(`Sent ${buffer.byteLength} bytes.`);
+
+        socket.send("stop");
+        addMessage("Sent stop.");
+      };
+
+      socket.onmessage = (event) => {
+        addMessage(event.data);
+      };
+
+      socket.onerror = () => {
+        setStatus("WebSocket error");
+        addMessage("WebSocket error.");
+      };
+
+      socket.onclose = () => {
+        setStatus("Closed");
+        startButton.disabled = false;
+        stopButton.disabled = true;
+      };
+    });
+
+    stopButton.addEventListener("click", () => {
+      stopped = true;
+
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send("stop");
+        socket.close();
+      }
+
+      setStatus("Stopped");
+    });
+  </script>
+</body>
+</html>
