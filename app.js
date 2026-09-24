@@ -50,6 +50,7 @@ let ws = null, role = null, t = S.german;
 let retry = 0, retryTimer = null, pingTimer = null, lastPong = 0;
 let stopped = false, panelsReady = false, joined = false, inRoom = false;
 let asrStatus = "off", errorTimer = null;
+const costs = new Map();  // message id -> LLM cost in USD (German view)
 
 const mic = new Mic(onFrame);
 const player = new Player();
@@ -152,9 +153,11 @@ function handle(ev) {
       $("app").hidden = false;
       banner("");
       $("chat").replaceChildren();
+      costs.clear();
       setupPanels(ev);
       applySettings(ev);
       ev.messages.forEach(render);
+      updateTotal();
       setPresence(ev.online);
       setStatus("online");
       lastPong = Date.now();
@@ -211,11 +214,32 @@ function render(m) {
     [state, failed ? t.failed : ""].filter(Boolean).join(" · ");
   el.classList.toggle("delayed", m.state === "delayed");
   if (role === "german" || debug) {
-    el.querySelector(".meta").textContent = m.segments.length
-      ? "lag " + m.segments.map((s) => s.lag.toFixed(1)).join(" / ") + " s"
-      : "";
+    const bits = [];
+    if (m.segments.length) {
+      bits.push("lag " +
+                m.segments.map((s) => s.lag.toFixed(1)).join(" / ") + " s");
+    }
+    if (role === "german" && m.cost) bits.push(m.cost.toFixed(4) + " USD");
+    el.querySelector(".meta").textContent = bits.join(" · ");
+  }
+  if (role === "german") {
+    costs.set(m.id, m.cost || 0);
+    updateTotal();
   }
   if (atBottom) scrollToBottom();
+}
+
+function updateTotal() {
+  if (role !== "german") return;
+  let el = $("cost-total");
+  if (!el) {
+    el = document.createElement("span");
+    el.id = "cost-total";
+    $("settings").append(el);
+  }
+  let sum = 0;
+  for (const c of costs.values()) sum += c;
+  el.textContent = "LLM gesamt " + sum.toFixed(3) + " USD";
 }
 
 function setPresence(online) {
