@@ -1,0 +1,48 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width">
+<input id="url" size="40" placeholder="wss://xxxx.cloreai.ru/ws">
+<button id="go">Test</button>
+<pre id="log"></pre>
+<script>
+  function log(s) {
+    document.getElementById("log").textContent += s + "\n";
+  }
+  document.getElementById("go").onclick = function () {
+    var ws = new WebSocket(document.getElementById("url").value);
+    var rtts = [];
+    var opened = 0;
+    ws.onopen = function () {
+      opened = Date.now();
+      log("open");
+      var audio = setInterval(function () {
+        ws.send(new Uint8Array(8000));
+      }, 250);
+      var ping = setInterval(function () {
+        ws.send(JSON.stringify({ t: performance.now() }));
+      }, 1000);
+      setTimeout(function () {
+        clearInterval(audio);
+        clearInterval(ping);
+        rtts.sort(function (a, b) { return a - b; });
+        if (rtts.length) {
+          log("RTT median " + rtts[rtts.length >> 1].toFixed(0) +
+              " ms, max " + rtts[rtts.length - 1].toFixed(0) + " ms");
+        }
+        log("idle test: silent for 180 s...");
+        setTimeout(function () {
+          ws.send(JSON.stringify({ t: performance.now() }));
+          log("still open after idle");
+        }, 180000);
+      }, 20000);
+    };
+    ws.onmessage = function (e) {
+      var m = JSON.parse(e.data);
+      if (m.t !== undefined) rtts.push(performance.now() - m.t);
+    };
+    ws.onclose = function (e) {
+      var s = ((Date.now() - opened) / 1000).toFixed(0);
+      log("closed code=" + e.code + " after " + s + " s");
+    };
+    ws.onerror = function () { log("error"); };
+  };
+</script>
