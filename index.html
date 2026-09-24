@@ -1,313 +1,43 @@
 <!doctype html>
-<html lang="en">
+<html lang="de">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Malagasy Streaming Test</title>
-
-  <style>
-    body {
-      max-width: 760px;
-      margin: 2rem auto;
-      padding: 0 1rem;
-      font-family: system-ui, sans-serif;
-      line-height: 1.5;
-    }
-
-    h1 {
-      margin-bottom: 0.25rem;
-    }
-
-    button {
-      margin: 0.5rem 0.5rem 0.5rem 0;
-      padding: 0.6rem 1rem;
-      cursor: pointer;
-    }
-
-    button:disabled {
-      cursor: default;
-      opacity: 0.5;
-    }
-
-    #version {
-      color: #666;
-      font-size: 0.9rem;
-    }
-
-    #status {
-      font-weight: 600;
-    }
-
-    pre {
-      min-height: 12rem;
-      padding: 1rem;
-      overflow-wrap: anywhere;
-      white-space: pre-wrap;
-      background: #f2f2f2;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-    }
-
-    .note {
-      color: #555;
-      font-size: 0.95rem;
-    }
-  </style>
+  <title>Resaka</title>
+  <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
-  <h1>Malagasy streaming test</h1>
-
-  <p id="version">
-    Version 0.2.0 — real-time PCM chunk test
-  </p>
-
-  <p class="note">
-    Select a raw PCM file in mono, 16 kHz, signed 16-bit little-endian
-    format. The file will be sent to the server in real-time-sized chunks.
-  </p>
-
-  <p>
-    <input
-      id="audioFile"
-      type="file"
-      accept="audio/*,.pcm,.raw"
-    >
-  </p>
-
-  <p>
-    <button id="startButton">
-      Start simulated stream
-    </button>
-
-    <button id="stopButton" disabled>
-      Stop
-    </button>
-  </p>
-
-  <p>
-    Status:
-    <span id="status">Idle</span>
-  </p>
-
-  <h2>Server messages</h2>
-  <pre id="messages"></pre>
-
-  <script>
-    const websocketUrl =
-      "wss://25ycbm8ibdugo.clorecloud.net/stream";
-
-    const sampleRate = 16000;
-    const channels = 1;
-    const bytesPerSample = 2;
-    const chunkSeconds = 0.5;
-
-    const chunkBytes =
-      sampleRate *
-      channels *
-      bytesPerSample *
-      chunkSeconds;
-
-    const audioFileInput =
-      document.querySelector("#audioFile");
-
-    const startButton =
-      document.querySelector("#startButton");
-
-    const stopButton =
-      document.querySelector("#stopButton");
-
-    const statusElement =
-      document.querySelector("#status");
-
-    const messagesElement =
-      document.querySelector("#messages");
-
-    let socket = null;
-    let stopped = false;
-
-    function setStatus(message) {
-      statusElement.textContent = message;
-    }
-
-    function addMessage(message) {
-      messagesElement.textContent += `${message}\n`;
-      messagesElement.scrollTop = messagesElement.scrollHeight;
-    }
-
-    function sleep(milliseconds) {
-      return new Promise((resolve) => {
-        setTimeout(resolve, milliseconds);
-      });
-    }
-
-    function resetButtons() {
-      startButton.disabled = false;
-      stopButton.disabled = true;
-    }
-
-    startButton.addEventListener("click", async () => {
-      const file = audioFileInput.files[0];
-
-      if (!file) {
-        setStatus("Choose a PCM file first.");
-        return;
-      }
-
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        setStatus("A stream is already running.");
-        return;
-      }
-
-      startButton.disabled = true;
-      stopButton.disabled = false;
-      stopped = false;
-      messagesElement.textContent = "";
-      setStatus("Connecting...");
-
-      socket = new WebSocket(websocketUrl);
-      socket.binaryType = "arraybuffer";
-
-      socket.onopen = async () => {
-        setStatus("Streaming");
-        addMessage("WebSocket connected.");
-
-        try {
-          const buffer = await file.arrayBuffer();
-
-          const totalChunks = Math.ceil(
-            buffer.byteLength / chunkBytes
-          );
-
-          const durationSeconds =
-            buffer.byteLength /
-            (sampleRate * channels * bytesPerSample);
-
-          addMessage(
-            `File size: ${buffer.byteLength} bytes`
-          );
-
-          addMessage(
-            `Audio duration: ${durationSeconds.toFixed(3)} seconds`
-          );
-
-          addMessage(
-            `Sending ${totalChunks} chunks of ` +
-            `${chunkSeconds} seconds`
-          );
-
-          for (
-            let offset = 0;
-            offset < buffer.byteLength;
-            offset += chunkBytes
-          ) {
-            if (stopped) {
-              break;
-            }
-
-            if (socket.readyState !== WebSocket.OPEN) {
-              throw new Error("WebSocket closed during streaming");
-            }
-
-            const end = Math.min(
-              offset + chunkBytes,
-              buffer.byteLength
-            );
-
-            const chunk = buffer.slice(offset, end);
-            socket.send(chunk);
-
-            const chunkNumber =
-              Math.floor(offset / chunkBytes) + 1;
-
-            if (
-              chunkNumber === 1 ||
-              chunkNumber % 10 === 0 ||
-              end === buffer.byteLength
-            ) {
-              addMessage(
-                `Sent chunk ${chunkNumber}/${totalChunks}`
-              );
-            }
-
-            await sleep(chunkSeconds * 1000);
-          }
-
-          if (
-            !stopped &&
-            socket.readyState === WebSocket.OPEN
-          ) {
-            socket.send("stop");
-            addMessage("Sent stop.");
-            setStatus("Finishing...");
-          }
-        } catch (error) {
-          addMessage(`Streaming error: ${error.message}`);
-          setStatus("Error");
-
-          if (socket.readyState === WebSocket.OPEN) {
-            socket.close();
-          }
-
-          resetButtons();
-        }
-      };
-
-      socket.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-
-          if (message.event === "received") {
-            if (
-              message.packets === 1 ||
-              message.packets % 10 === 0
-            ) {
-              addMessage(
-                `Server received ${message.packets} packets ` +
-                `(${message.audio_seconds} seconds)`
-              );
-            }
-          } else if (message.event === "complete") {
-            addMessage(
-              `Complete: ${message.audio_seconds} seconds received`
-            );
-
-            setStatus("Complete");
-          } else {
-            addMessage(event.data);
-          }
-        } catch {
-          addMessage(event.data);
-        }
-      };
-
-      socket.onerror = () => {
-        setStatus("WebSocket error");
-        addMessage("WebSocket error.");
-        resetButtons();
-      };
-
-      socket.onclose = () => {
-        if (!stopped && statusElement.textContent !== "Complete") {
-          setStatus("Closed");
-        }
-
-        resetButtons();
-      };
-    });
-
-    stopButton.addEventListener("click", () => {
-      stopped = true;
-
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send("stop");
-        setStatus("Finishing...");
-        addMessage("Stop requested.");
-      } else {
-        setStatus("Stopped");
-        resetButtons();
-      }
-    });
-  </script>
+  <div id="setup" hidden>
+    <label>Server <input id="setup-server" placeholder="wss://…/ws"></label>
+    <label>Code / Kaody <input id="setup-code"></label>
+    <button id="setup-go">OK</button>
+    <p id="setup-error"></p>
+  </div>
+  <div id="app" hidden>
+    <header>
+      <span id="status-dot"></span>
+      <span id="status-text"></span>
+      <span id="partner"></span>
+    </header>
+    <div id="banner" hidden></div>
+    <div id="settings" hidden>
+      <label>LLM <select id="provider"></select></label>
+      <span id="provider-status"></span>
+      <label>Modus
+        <select id="mode">
+          <option value="chunked">Live (Chunks)</option>
+          <option value="whole_turn">Ganzer Beitrag</option>
+        </select>
+      </label>
+      <label>Fixture <select id="fixture"></select></label>
+      <button id="play">▶</button>
+    </div>
+    <main id="chat"></main>
+    <footer id="debug" hidden>
+      <textarea id="sim-text" rows="2"></textarea>
+      <button id="sim-go"></button>
+    </footer>
+  </div>
+  <script type="module" src="app.js"></script>
 </body>
 </html>
